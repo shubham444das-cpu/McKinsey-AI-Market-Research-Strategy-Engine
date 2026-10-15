@@ -2,8 +2,6 @@
 
 An AI-powered market research application that turns a business question into a structured strategy brief. Built with **Python, Streamlit, Gemini, web search, and a multi-agent research workflow**, it collects source material, extracts claims, validates evidence, identifies themes, and generates recommendations with traceable URLs.
 
-> **Important:** This project is a research assistant, not a substitute for expert judgment. Verify important claims and source links before using findings for business decisions.
-
 ## Highlights
 
 - **Research planning:** Breaks a broad business question into focused research tasks and search queries.
@@ -235,19 +233,6 @@ Do not upload `.env`, virtual environments, API keys, or generated private resea
 - LLM-generated summaries and recommendations can contain errors. Check original sources.
 - API model availability, quotas, and pricing may change.
 
-## Future Improvements
-
-- Add domain allowlists and source-quality scoring.
-- Improve source deduplication and recency checks.
-- Add stronger cross-source claim verification.
-- Add export options for Markdown/PDF and downloadable evidence tables.
-- Add automated tests, structured logs, and configurable research-depth limits.
-- Add caching and clearer handling of API quota failures.
-
 ## License
 
 No license file was included in the supplied project archive. Before publishing, choose a license (for example, MIT) and add a `LICENSE` file if you want others to reuse the code. Without a license, standard copyright restrictions apply.
-
-## Disclaimer
-
-This project is an independent portfolio project and is not affiliated with, endorsed by, or sponsored by McKinsey & Company. The name is used descriptively to indicate a consulting-style market research workflow.
