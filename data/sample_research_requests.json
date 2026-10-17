@@ -1,0 +1,26 @@
+[
+  {
+    "query": "Should we enter the fintech-for-freelancers market in Southeast Asia?",
+    "market": "Fintech / freelancer payments",
+    "geography": "Southeast Asia",
+    "timeframe": "last 12 months",
+    "competitors": "Wise, Payoneer, Airwallex",
+    "depth": "Standard"
+  },
+  {
+    "query": "How are Stripe, Adyen, and Checkout.com positioning in embedded finance?",
+    "market": "Embedded finance / payments infrastructure",
+    "geography": "Global",
+    "timeframe": "last 6 months",
+    "competitors": "Stripe, Adyen, Checkout.com",
+    "depth": "Deep"
+  },
+  {
+    "query": "What are the emerging signals in enterprise AI agent adoption this year?",
+    "market": "Enterprise AI / agentic software",
+    "geography": "North America and Europe",
+    "timeframe": "this year",
+    "competitors": "",
+    "depth": "Quick"
+  }
+]
