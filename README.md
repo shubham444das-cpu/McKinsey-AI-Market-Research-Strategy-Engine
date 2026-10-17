@@ -1,238 +1,131 @@
-# AI Market Research & Strategy Engine
+# AI Market Research & Strategy Engine (Streamlit Edition)
 
-An AI-powered market research application that turns a business question into a structured strategy brief. Built with **Python, Streamlit, Gemini, web search, and a multi-agent research workflow**, it collects source material, extracts claims, validates evidence, identifies themes, and generates recommendations with traceable URLs.
+A single-stack, Python-only implementation of an agentic market-research pipeline:
 
-## Highlights
-
-- **Research planning:** Breaks a broad business question into focused research tasks and search queries.
-- **Web discovery:** Searches the web through configurable providers and collects relevant pages or search snippets.
-- **Evidence extraction:** Converts source content into structured claims, excerpts, entities, and topics.
-- **Evidence validation:** Flags weak or unsupported evidence and records validation notes and confidence scores.
-- **Insight aggregation:** Groups accepted evidence into themes and market signals.
-- **Strategy brief generation:** Produces an executive summary, key findings, competitor observations, implications, and recommendations.
-- **Evidence review UI:** Inspect accepted and rejected evidence, source URLs, fetch status, and workflow logs.
-- **Research memory / retrieval:** Retrieves related prior research where available.
-- **Streamlit interface:** Runs as a single Python application without a separate JavaScript frontend.
-
-## Workflow
-
-```text
-Business Question
-       |
-       v
-Research Planner
-       |
-       v
-Web Search & Page Fetching
-       |
-       v
-Evidence Extraction
-       |
-       v
-Evidence Validation
-       |
-       v
-Theme & Insight Aggregation
-       |
-       v
-Strategy Brief + Evidence Appendix
+```
+Query -> Planner Agent -> Web Search Agents -> Extraction -> Validation -> Aggregation -> Report Generation
 ```
 
-## Tech Stack
+Everything — UI and "backend" logic — runs inside one Streamlit app and a set of plain
+Python modules. There is no separate JS/Node backend and no Java anywhere in the stack.
 
-- **Language:** Python
-- **UI:** Streamlit
-- **LLM:** Google Gemini (`google-genai`)
-- **Web search:** Gemini Grounding with Google Search, `googlesearch-python`, or DuckDuckGo fallback
-- **Page parsing:** Requests, Beautiful Soup
-- **Research retrieval/memory:** Embedding-based retrieval components
-- **Configuration:** `python-dotenv`
+## Why this shape
 
-## Repository Structure
+The original dossier calls for Next.js + FastAPI + multi-agent orchestration. For a
+data-science/GenAI project you don't need three languages to prove the workflow works.
+Streamlit gives you the UI, session state gives you the "job" object, and Python
+functions give you the agents. You can always peel this apart into a real frontend/backend
+later if the product needs to scale to many concurrent users — the agent modules are
+already isolated so that split is mechanical, not a rewrite.
 
-```text
-McKinsey-AI-Market-Research-Strategy-Engine/
-└── app/
-    ├── app.py                    # Streamlit interface and pipeline orchestration
-    ├── requirements.txt          # Python dependencies
-    ├── .env.example              # Example environment configuration
-    ├── check_search.py           # Search-provider diagnostic
-    ├── agents/
-    │   ├── planner.py            # Research planning
-    │   ├── browser.py            # Search and source collection
-    │   ├── extractor.py          # Structured evidence extraction
-    │   ├── validator.py          # Evidence checks
-    │   ├── aggregator.py         # Theme and insight aggregation
-    │   └── report_writer.py      # Strategy brief generation
-    ├── utils/
-    │   ├── llm_client.py         # Gemini client and model fallback handling
-    │   ├── search.py             # Search-provider integrations
-    │   ├── rag_store.py          # Embedding/retrieval utilities
-    │   ├── memory.py             # Research memory
-    │   └── models.py             # Shared data models
-    ├── data/
-    │   └── sample_research_requests.json
-    ├── Evidence SS.png
-    └── REPORT SS.png
+## Architecture
+
+```
+app.py                     <- Streamlit UI (4 tabs = 4 product surfaces)
+agents/
+  planner.py                <- decomposes the research question into sub-tasks
+  browser.py                 <- runs Google search + fetches pages for each sub-task
+  extractor.py                <- turns page text into structured evidence records (LLM)
+  validator.py                 <- scores each evidence record for credibility/recency/conflict
+  aggregator.py                 <- groups validated evidence into themes
+  report_writer.py               <- writes the final Markdown research brief (LLM)
+utils/
+  models.py                  <- dataclasses: ResearchJob, SourceRecord, EvidenceRecord, Report
+  llm_client.py                <- Gemini API wrapper, with retry + model fallback (see below)
+  rag_store.py                   <- chunk/embed/retrieve layer (traditional RAG, see below)
+  memory.py                        <- local JSON "memory" of past validated findings, for reuse
+data/
+  sample_research_requests.json
 ```
 
-## Getting Started
+## Reliability: Gemini retry and fallback
 
-### 1. Prerequisites
+Every LLM call (`ask_text`, `ask_json`, `embed_texts` in `utils/llm_client.py`)
+goes through `_call_with_retry_and_fallback`, which:
 
-- Python **3.11 or 3.12** recommended for broad package compatibility
-- A Google Gemini API key: [Get an API key](https://aistudio.google.com/apikey)
-- Git (optional, for cloning)
+- retries transient failures (429/500/502/503/504, timeouts, "unavailable")
+  on the same model with exponential backoff, up to 3 attempts;
+- on non-retryable errors, or once retries on a model are exhausted, moves
+  on to the next model in `GEMINI_MODEL_FALLBACK` (comma-separated,
+  configurable in `.env`) and retries there;
+- only raises once every model/attempt combination has failed.
 
-### 2. Clone the repository
+A malformed-JSON response from `ask_json` is treated as retryable too —
+another attempt or another model may well produce valid JSON — instead of
+failing the whole pipeline stage on one bad parse.
 
-```bash
-git clone https://github.com/YOUR-USERNAME/McKinsey-AI-Market-Research-Strategy-Engine.git
-cd McKinsey-AI-Market-Research-Strategy-Engine/app
-```
+## Retrieval-augmented generation (traditional RAG)
 
-Replace `YOUR-USERNAME` with your GitHub username. If you downloaded the project as a ZIP, open a terminal in the `app` directory instead.
+`utils/rag_store.py` implements a small, dependency-light RAG layer: chunk
+text -> embed chunks (Gemini embeddings) -> brute-force cosine-similarity
+retrieval -> feed the retrieved text into an LLM prompt. It's used in three
+places:
 
-### 3. Create and activate a virtual environment
+- **Extraction** (`agents/extractor.py`): long source pages are chunked and
+  only the chunks most relevant to the specific sub-question are retrieved
+  and passed to the extraction prompt, instead of blindly truncating the
+  page to the first N characters.
+- **Aggregation** (`agents/aggregator.py`): if a Deep-depth job produces
+  more accepted evidence than comfortably fits one synthesis prompt, the
+  claims most relevant to the research objective are retrieved instead of
+  dumping every claim in. (The report's evidence appendix still lists every
+  accepted/excluded record regardless — this only affects what goes into
+  the theme-synthesis prompt.)
+- **Memory** (`utils/memory.py`): past validated findings are embedded and
+  stored in `rag_store.json`; a new query recalls related past findings by
+  embedding similarity rather than raw keyword overlap.
 
-**Windows PowerShell**
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
+Swap `rag_store.py`'s persistence/index for FAISS/Chroma/pgvector later if
+you need it to scale past one process's in-memory corpus — the chunk/embed/
+retrieve call shapes (`chunk_text`, `rank_by_relevance`, `persist_finding`,
+`recall_similar`) are the only things callers depend on.
 
-If PowerShell blocks activation for this terminal, run:
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-.\.venv\Scripts\Activate.ps1
-```
+Job state machine (mirrors the dossier's lifecycle, just in-process instead of a queue):
 
-**macOS / Linux**
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-```
+`intake -> planning -> browsing -> extraction -> validation -> aggregation -> report -> done`
 
-### 4. Install dependencies
+Each stage's output is stored in `st.session_state.job` so the Workflow Monitor tab can
+show exactly what happened at each step (sources found, evidence extracted, what was
+flagged low-confidence, what was rejected) — that transparency is the whole point of the
+Evidence Review Panel in the original dossier.
 
-```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
+## Setup
 
-### 5. Configure environment variables
+1. `pip install -r requirements.txt`
+2. Copy `.env.example` to `.env` and add your key (get one at
+   https://aistudio.google.com/apikey):
+   ```
+   GEMINI_API_KEY=...
+   ```
+3. `streamlit run app.py`
 
-Copy `.env.example` to `.env`.
+No other services required — search (`utils/search.py`) tries Gemini's Google Search grounding with your
+existing key, then `googlesearch-python`, then a keyless DuckDuckGo scrape; set `SEARCH_PROVIDER` in `.env`,
+and run `python check_search.py` to see which provider works on your machine)
+and page fetching uses `requests` + `BeautifulSoup`. Memory is a local JSON file
+(`memory_store.json`), so there's no database to stand up. Swap in Chroma/Qdrant/Supabase
+later if you need multi-user persistence — `utils/memory.py` is the only file that
+would need to change.
 
-**Windows PowerShell**
-```powershell
-Copy-Item .env.example .env
-```
+## Product surfaces (mapped to Streamlit tabs)
 
-**macOS / Linux**
-```bash
-cp .env.example .env
-```
+| Dossier surface | Streamlit tab |
+|---|---|
+| Research Intake Console | "1. Research Intake" |
+| Agent Workflow Monitor | "2. Workflow Monitor" |
+| Evidence Review Panel | "3. Evidence Review" |
+| Strategy Brief Builder | "4. Report" |
 
-Open `.env` and set your API key:
+The Knowledge/Memory Workspace and Ops Dashboard from the dossier are represented as a
+sidebar memory browser and a small stats panel — full versions of those are natural
+follow-ups once the core pipeline is proven out.
 
-```env
-GEMINI_API_KEY=your_actual_api_key
-```
+## Honest scope notes
 
-Optional settings are available in `.env.example`, including the primary Gemini model, fallback models, embedding model, and search provider. Use model IDs currently supported by your Google AI account and SDK. Model availability and quotas can change; if a model returns a 404 or 429 error, check the current Gemini model list and your API quota.
-
-**Never commit `.env` or publish your API key.** Keep secrets in local environment variables or your deployment platform's secret manager.
-
-### 6. Run the application
-
-From the `app` directory, with your virtual environment active:
-
-```bash
-streamlit run app.py
-```
-
-Streamlit will print a local URL, usually `http://localhost:8501`. Open it in your browser.
-
-## Using the App
-
-1. Open the research intake section.
-2. Enter a focused business question, such as a market-entry, competitor, or trend-analysis question.
-3. Start the research workflow.
-4. Review the **Workflow Monitor** for research tasks, source counts, and execution logs.
-5. Use the **Evidence Review** section to inspect claims, excerpts, confidence, validation notes, and source links.
-6. Read the generated **Strategy Brief** and evidence appendix.
-7. Independently verify critical facts before relying on the recommendations.
-
-### Example research questions
-
-- Should we enter the fintech-for-freelancers market in Southeast Asia?
-- How are Stripe, Adyen, and Checkout.com positioning themselves in embedded finance?
-- What are the emerging signals in enterprise AI agent adoption?
-- Which competitors, customer needs, and regulatory factors should be considered before entering a new market?
-
-## Search Configuration & Troubleshooting
-
-The application supports configurable search providers. Review the comments in `.env.example` and `utils/search.py` for the supported values and provider order.
-
-### No sources found
-- Run the diagnostic from the `app` directory:
-  ```bash
-  python check_search.py
-  ```
-- Confirm that `.env` is in the same `app` directory from which you run Streamlit.
-- Check internet access and whether your selected search provider is rate-limiting requests.
-- Try the configured fallback provider and simplify the research query.
-
-### Gemini 404 / model not found
-- Confirm that the model ID is currently available to your API key.
-- Update `GEMINI_MODEL` and `GEMINI_MODEL_FALLBACK` in `.env` to supported model IDs.
-- Check that the installed `google-genai` SDK is up to date.
-
-### Gemini 429 / quota exceeded
-- Check Google AI Studio quota and billing/rate limits for your account.
-- Reduce repeated or concurrent requests and retry after the quota window resets.
-- A fallback model does not guarantee that quota limits will be avoided.
-
-### Dependency or Python errors
-- Use a fresh virtual environment with Python 3.11 or 3.12.
-- Install packages from `app/requirements.txt` while your terminal is in the `app` directory.
-- If installation fails, review the first package-specific error in the terminal output.
-
-## Screenshots
-
-The repository includes these screenshots:
-
-- `app/Evidence SS.png` — evidence review interface
-- `app/REPORT SS.png` — generated strategy report
-
-If you move the screenshots into a `screenshots/` directory, update the image paths below accordingly.
-
-### Evidence Review
-![Evidence Review](app/Evidence%20SS.png)
-
-### Strategy Report
-![Strategy Report](app/REPORT%20SS.png)
-
-## Deployment
-
-The app can be deployed to a Streamlit-compatible hosting service or another Python hosting platform.
-
-At minimum, configure the deployment with:
-- The app entry point: `app.py`
-- The dependencies from `requirements.txt`
-- `GEMINI_API_KEY` and any optional configuration as platform secrets/environment variables
-
-Do not upload `.env`, virtual environments, API keys, or generated private research data to a public repository. Confirm that the selected host's Python version and outbound network access are compatible with the app.
-
-## Limitations
-
-- Search results and webpage availability depend on third-party services, network access, and rate limits.
-- Some sites block automated fetching or render content with JavaScript; the app may fall back to search snippets.
-- Evidence validation reduces risk but cannot guarantee that every claim is correct or unbiased.
-- LLM-generated summaries and recommendations can contain errors. Check original sources.
-- API model availability, quotas, and pricing may change.
-
-## License
-
-No license file was included in the supplied project archive. Before publishing, choose a license (for example, MIT) and add a `LICENSE` file if you want others to reuse the code. Without a license, standard copyright restrictions apply.
+- Source "validation" is LLM-judged plausibility + recency + duplication checks, not a
+  hardened credibility database — flag this clearly to reviewers, same as the dossier
+  asks.
+- This is a first-draft generator. Every report ends with a human-review reminder and
+  never claims to be client-ready advice, per the dossier's compliance requirement.
+- No client-sensitive or credential data is stored anywhere; memory only holds
+  research topic summaries and public-source citations.
